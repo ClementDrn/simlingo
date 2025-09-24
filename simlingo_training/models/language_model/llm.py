@@ -7,9 +7,13 @@ from transformers import AutoModel, AutoTokenizer
 
 from typing import Any, Dict, Optional, Tuple
 from torch.nn import functional as F
+import warnings
 
 import torch
 from torch import Tensor, nn
+
+from simlingo_training.utils.gpu_compatibility import safe_model_loading_context, get_safe_model_kwargs
+
 
 CONFIGS: Dict[str, Dict[str, Any]] = {
     "debug": dict(num_hidden_layers=2, num_attention_heads=2, hidden_size=32, intermediate_size=64),
@@ -84,8 +88,22 @@ class LLM(nn.Module):
             self.tokenizer = LlavaNextProcessor.from_pretrained(self.variant, torch_dtype="auto",  trust_remote_code=True).tokenizer
             self.model = self.model.language_model
             self.model.embed_tokens = self.model.base_model.embed_tokens
-        elif 'internvl' in self.variant.lower():
-            self.model = AutoModel.from_pretrained(self.variant, trust_remote_code=True)
+        elif 'internvl' in self.variant.lower():           
+            # Use safe model loading with V100 compatibility
+            with safe_model_loading_context() as ctx:
+                try:
+                    if not ctx.is_flash_supported():
+                        # For V100 and older GPUs, use eager attention
+                        safe_kwargs = get_safe_model_kwargs({"trust_remote_code": True})
+                        self.model = AutoModel.from_pretrained(self.variant, **safe_kwargs)
+                    else:
+                        # For Ampere and newer, use default (likely FlashAttention)
+                        self.model = AutoModel.from_pretrained(self.variant, trust_remote_code=True)
+                except Exception as e:
+                    print(f"\033[93mLLM: Failed to load with optimal settings: {e}\033[0m")
+                    print(f"\033[93mLLM: Falling back to default model loading...\033[0m")
+                    self.model = AutoModel.from_pretrained(self.variant, trust_remote_code=True)
+            
             self.model = self.model.language_model
             try:
                 self.model.embed_tokens = self.model.base_model.embed_tokens
