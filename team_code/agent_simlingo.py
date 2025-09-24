@@ -3,7 +3,14 @@ partially taken from https://github.com/autonomousvision/carla_garage/blob/leade
 (MIT licence)
 """
 
-
+# Volta GPU compatibility fix - import this first
+try:
+    from simlingo_training.utils.gpu_compatibility import setup_volta_compatibility
+    setup_volta_compatibility()  # Note that this function will be discarded since it has already run during import. This is just for clarity.
+    print("Volta GPU compatibility utilities loaded successfully.")
+except ImportError as e:
+    print(f"Warning: Could not load Volta compatibility utilities: {e}")
+    
 import importlib.util
 import json
 import math
@@ -47,7 +54,6 @@ from team_code.simlingo_utils import (
     project_points,
 )
 
-from simlingo_training.utils.gpu_compatibility import setup_v100_compatibility
 
 
 # Configure pytorch for maximum performance
@@ -166,25 +172,6 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         cache_dir = f"pretrained/{(cfg.model.vision_model.variant.split('/')[1])}"
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(torch.bfloat16)
-        
-        # Set up V100 compatibility before loading model
-        try:
-            setup_v100_compatibility()
-        except ImportError:
-            # Fallback if utility is not available
-            if torch.cuda.is_available():
-                gpu_capability = torch.cuda.get_device_capability()
-                print(f"\033[93mAgent: Detected GPU capability: {gpu_capability}\033[0m")
-                
-                if gpu_capability[0] < 8:
-                    print(f"\033[91mAgent: GPU capability {gpu_capability} is below Ampere architecture (8.0).\033[0m")
-                    print(f"\033[91mAgent: FlashAttention not supported. Setting environment variables for fallback.\033[0m")
-                    
-                    os.environ["DISABLE_FLASH_ATTN"] = "1"
-                    os.environ["FLASH_ATTENTION_DISABLE"] = "1"
-                    
-                    warnings.filterwarnings("ignore", message=".*flash_attention.*")
-                    warnings.filterwarnings("ignore", message=".*FlashAttention.*")
         
         self.model = hydra.utils.instantiate(
                 cfg.model,

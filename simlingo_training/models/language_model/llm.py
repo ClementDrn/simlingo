@@ -12,8 +12,6 @@ import warnings
 import torch
 from torch import Tensor, nn
 
-from simlingo_training.utils.gpu_compatibility import safe_model_loading_context, get_safe_model_kwargs
-
 
 CONFIGS: Dict[str, Dict[str, Any]] = {
     "debug": dict(num_hidden_layers=2, num_attention_heads=2, hidden_size=32, intermediate_size=64),
@@ -89,20 +87,16 @@ class LLM(nn.Module):
             self.model = self.model.language_model
             self.model.embed_tokens = self.model.base_model.embed_tokens
         elif 'internvl' in self.variant.lower():           
-            # Use safe model loading with V100 compatibility
-            with safe_model_loading_context() as ctx:
-                try:
-                    if not ctx.is_flash_supported():
-                        # For V100 and older GPUs, use eager attention
-                        safe_kwargs = get_safe_model_kwargs({"trust_remote_code": True})
-                        self.model = AutoModel.from_pretrained(self.variant, **safe_kwargs)
-                    else:
-                        # For Ampere and newer, use default (likely FlashAttention)
-                        self.model = AutoModel.from_pretrained(self.variant, trust_remote_code=True)
-                except Exception as e:
-                    print(f"\033[93mLLM: Failed to load with optimal settings: {e}\033[0m")
-                    print(f"\033[93mLLM: Falling back to default model loading...\033[0m")
-                    self.model = AutoModel.from_pretrained(self.variant, trust_remote_code=True)
+            from simlingo_training.utils.gpu_compatibility import get_safe_model_kwargs
+            
+            # Load with Volta-compatible parameters
+            try:
+                safe_kwargs = get_safe_model_kwargs()
+                self.model = AutoModel.from_pretrained(self.variant, **safe_kwargs)
+                print(f"Loaded LLM {self.variant} with GPU-compatible parameters")
+            except Exception as e:
+                print(f"Warning: LLM: Could not load with safe parameters ({e}), using default loading")
+                self.model = AutoModel.from_pretrained(self.variant, trust_remote_code=True)
             
             self.model = self.model.language_model
             try:
