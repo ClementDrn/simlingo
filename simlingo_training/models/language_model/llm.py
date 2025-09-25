@@ -1,5 +1,3 @@
-
-
 from transformers import LlamaModel, LlamaConfig, AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from transformers import GPTNeoXForCausalLM
 from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
@@ -11,6 +9,11 @@ import warnings
 
 import torch
 from torch import Tensor, nn
+from simlingo_training.utils.gpu_compatibility import (
+    get_safe_model_kwargs,
+    force_eager_everywhere,
+    install_sdpa_qwen2_fallback,
+)
 
 
 CONFIGS: Dict[str, Dict[str, Any]] = {
@@ -88,16 +91,15 @@ class LLM(nn.Module):
             self.model.embed_tokens = self.model.base_model.embed_tokens
         elif 'internvl' in self.variant.lower():           
             from simlingo_training.utils.gpu_compatibility import get_safe_model_kwargs
-            
-            # Load with Volta-compatible parameters
             try:
                 safe_kwargs = get_safe_model_kwargs()
                 self.model = AutoModel.from_pretrained(self.variant, **safe_kwargs)
+                force_eager_everywhere(self.model)
+                install_sdpa_qwen2_fallback()
                 print(f"Loaded LLM {self.variant} with GPU-compatible parameters")
             except Exception as e:
                 print(f"Warning: LLM: Could not load with safe parameters ({e}), using default loading")
                 self.model = AutoModel.from_pretrained(self.variant, trust_remote_code=True)
-            
             self.model = self.model.language_model
             try:
                 self.model.embed_tokens = self.model.base_model.embed_tokens

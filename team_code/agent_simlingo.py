@@ -5,8 +5,11 @@ partially taken from https://github.com/autonomousvision/carla_garage/blob/leade
 
 # Volta GPU compatibility fix - import this first
 try:
-    from simlingo_training.utils.gpu_compatibility import setup_volta_compatibility
-    setup_volta_compatibility()  # Note that this function will be discarded since it has already run during import. This is just for clarity.
+    from simlingo_training.utils.gpu_compatibility import (
+        setup_volta_compatibility,
+        get_preferred_compute_dtype,
+    )
+    setup_volta_compatibility()  # idempotent
     print("Volta GPU compatibility utilities loaded successfully.")
 except ImportError as e:
     print(f"Warning: Could not load Volta compatibility utilities: {e}")
@@ -23,6 +26,7 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from pathlib import Path
 import warnings
+from contextlib import suppress
 
 import carla
 import cv2
@@ -96,6 +100,13 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.step = -1
         self.initialized = False
         self.device = torch.device('cuda')
+        # Choose safe compute dtype for the current GPU (V100 lacks native bfloat16)
+        try:
+            cc_major, cc_minor = torch.cuda.get_device_capability()
+        except Exception:
+            cc_major, cc_minor = (0, 0)
+        # Prefer centralized helper (guarantees future consistency)
+        self.compute_dtype = get_preferred_compute_dtype()
         self.DrivingInput = {}
         self.config = GlobalConfig()
 
@@ -170,17 +181,29 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.tokenizer.padding_side = "left"
         # llm_tokenizer = AutoTokenizer.from_pretrained(cfg.model.language_model.variant)
         cache_dir = f"pretrained/{(cfg.model.vision_model.variant.split('/')[1])}"
+        # Temporarily change default dtype during model construction to the selected compute dtype
         default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(torch.bfloat16)
-        
+        torch.set_default_dtype(self.compute_dtype)
+
         self.model = hydra.utils.instantiate(
-                cfg.model,
-                cfg_data_module=cfg.data_module,
-                processor=processor,
-                cache_dir=cache_dir,
-                _recursive_=False
-            ).to(self.device)
+            cfg.model,
+            cfg_data_module=cfg.data_module,
+            processor=processor,
+            cache_dir=cache_dir,
+            _recursive_=False
+        ).to(self.device)
+        # Enforce eager attention + SDPA fallback after hydra instantiation (idempotent)
+        try:
+            from simlingo_training.utils.gpu_compatibility import force_eager_everywhere, install_sdpa_qwen2_fallback
+            with suppress(Exception):
+                force_eager_everywhere(self.model)
+            with suppress(Exception):
+                install_sdpa_qwen2_fallback()
+        except Exception:
+            pass
+        # Restore original default dtype
         torch.set_default_dtype(default_dtype)
+
         self.model.load_state_dict(torch.load(self.config_path))
         self.iter = self.config_path.split("epoch=")[-1].split("/")[0]
         self.session = self.config_path.split("/")[-4]
@@ -400,24 +423,25 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
             transform = build_transform(input_size=448)
             images_processed_tmp = []
             images_sizes_tmp = []
-            
+
             image = Image.fromarray(rgbs.squeeze(0).transpose(1, 2, 0))
             images = dynamic_preprocess(image, image_size=448, use_thumbnail=self.cfg.model.vision_model.use_global_img, max_num=2)
             pixel_values = [transform(image) for image in images]
             pixel_values = torch.stack(pixel_values)
             images_processed_tmp.append(pixel_values)
             images_sizes_tmp.append([image.size[1], image.size[0]])
-            
+
             images_processed = {
-                    'pixel_values': torch.stack(images_processed_tmp), 
-                    'image_sizes': torch.tensor(images_sizes_tmp)
-                    }  
+                'pixel_values': torch.stack(images_processed_tmp),
+                'image_sizes': torch.tensor(images_sizes_tmp)
+            }
+            # Capture image_sizes for DrivingInput (was previously left as None)
+            image_sizes = images_processed['image_sizes']
             processed_image = images_processed['pixel_values']
             num_patches = processed_image.shape[1]
             new_height = processed_image.shape[3]
             new_width = processed_image.shape[4]
             processed_image = processed_image.view(1, self.T, num_patches, C, new_height, new_width)
-            
         else:
             raise NotImplementedError(f"Encoder {self.cfg.data_module.encoder} not implemented yet")
         
@@ -540,7 +564,9 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
                         prompt_tp = f'Command: {command} in {dist_to_command} meter{next_command}.'
                 
         else:
-            result['route'] = route_img
+            # No explicit route representation required for current eval modes.
+            # Set to None to avoid NameError from undefined route_img.
+            result['route'] = None
 
         if self.config.use_cot:
             prompt = f"Current speed: {speed} m/s. {prompt_tp} What should the ego do next?"
@@ -657,18 +683,24 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         prompt_tokenized_mask = prompt_tokenized_valid
         
         ll = LanguageLabel(
-                phrase_ids=prompt_tokenized_ids.to(self.device),
-                phrase_valid=prompt_tokenized_valid.to(self.device),
-                phrase_mask=prompt_tokenized_mask.to(self.device),
-                placeholder_values=placeholder_batch_list,
-                language_string=prompt_batch_list,
-                loss_masking=None,
+            phrase_ids=prompt_tokenized_ids.to(self.device),
+            phrase_valid=prompt_tokenized_valid.to(self.device),
+            phrase_mask=prompt_tokenized_mask.to(self.device),
+            placeholder_values=placeholder_batch_list,
+            language_string=prompt_batch_list,
+            loss_masking=None,
         )
 
-        self.DrivingInput["camera_images"] = processed_image.to(self.device).bfloat16()
+        # Cast inputs to the selected compute dtype (fp16 on Volta, bf16 on Ampere+)
+        self.DrivingInput["camera_images"] = processed_image.to(self.device).to(self.compute_dtype)
         self.DrivingInput["image_sizes"] = image_sizes
-        self.DrivingInput["camera_intrinsics"] = torch.repeat_interleave(get_camera_intrinsics(W, H, 110).unsqueeze(0), 1, dim=0).view(1, 3, 3).float().to(self.device),
-        self.DrivingInput["camera_extrinsics"] = torch.repeat_interleave(get_camera_extrinsics().unsqueeze(0), 1, dim=0).view(1, 4, 4).float().to(self.device),
+        # Remove trailing commas so these remain tensors (not single-element tuples)
+        self.DrivingInput["camera_intrinsics"] = torch.repeat_interleave(
+            get_camera_intrinsics(W, H, 110).unsqueeze(0), 1, dim=0
+        ).view(1, 3, 3).float().to(self.device)
+        self.DrivingInput["camera_extrinsics"] = torch.repeat_interleave(
+            get_camera_extrinsics().unsqueeze(0), 1, dim=0
+        ).view(1, 4, 4).float().to(self.device)
         self.DrivingInput["vehicle_speed"] = result['speed']
         self.DrivingInput["target_point"] = result['target_point'].to(self.device)
         self.DrivingInput["prompt"] = ll
