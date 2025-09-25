@@ -358,6 +358,36 @@ def force_eager_everywhere(root):
     return root
 
 
+def disable_flash_attention_modules(root, verbose: bool = False):
+    """Force-disable any module attributes that would trigger FlashAttention paths.
+
+    Many community / remote code bases gate usage behind flags like `use_flash_attn`.
+    This walks the module tree and sets those to False. Safe on all architectures.
+    """
+    count = 0
+    visited = set()
+    stack = [root]
+    while stack:
+        m = stack.pop()
+        if id(m) in visited:
+            continue
+        visited.add(id(m))
+        for attr in ("use_flash_attn", "use_flash_attention", "flash_attn", "flash_attention"):
+            if hasattr(m, attr):
+                try:
+                    if getattr(m, attr):
+                        setattr(m, attr, False)
+                        count += 1
+                except Exception:  # pragma: no cover
+                    pass
+        for child in getattr(m, "children", lambda: [])():
+            if id(child) not in visited:
+                stack.append(child)
+    if verbose and count:
+        print(f"🔧 Disabled FlashAttention flags in {count} module(s)")
+    return root
+
+
 def get_safe_model_kwargs(base_kwargs: dict = None) -> dict:
     """Get safe model loading kwargs that work with both Volta and newer GPUs."""
     kwargs = base_kwargs.copy() if base_kwargs else {}
@@ -402,4 +432,5 @@ __all__ = [
     'get_preferred_compute_dtype',
     'install_sdpa_qwen2_fallback',
     'force_eager_everywhere',
+    'disable_flash_attention_modules',
 ]

@@ -194,11 +194,17 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         ).to(self.device)
         # Enforce eager attention + SDPA fallback after hydra instantiation (idempotent)
         try:
-            from simlingo_training.utils.gpu_compatibility import force_eager_everywhere, install_sdpa_qwen2_fallback
+            from simlingo_training.utils.gpu_compatibility import (
+                force_eager_everywhere,
+                install_sdpa_qwen2_fallback,
+                disable_flash_attention_modules,
+            )
             with suppress(Exception):
                 force_eager_everywhere(self.model)
             with suppress(Exception):
                 install_sdpa_qwen2_fallback()
+            with suppress(Exception):
+                disable_flash_attention_modules(self.model, verbose=True)
         except Exception:
             pass
         # Restore original default dtype

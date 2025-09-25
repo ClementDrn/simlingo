@@ -6,6 +6,7 @@ from simlingo_training.utils.gpu_compatibility import (
     get_safe_model_kwargs,
     force_eager_everywhere,
     install_sdpa_qwen2_fallback,
+    disable_flash_attention_modules,
 )
 
 
@@ -17,10 +18,12 @@ class LingoInternVLModel(nn.Module):
             self.model = AutoModel.from_pretrained(variant, **safe_kwargs)
             force_eager_everywhere(self.model)
             install_sdpa_qwen2_fallback()
+            disable_flash_attention_modules(self.model, verbose=True)
             print(f"✅ Loaded {variant} with GPU-compatible parameters")
         except Exception as e:
             print(f"⚠️  Could not load with safe parameters ({e}), using default loading")
             self.model = AutoModel.from_pretrained(variant, trust_remote_code=True)
+            disable_flash_attention_modules(self.model, verbose=True)
         try:
             self.num_embeddings = self.model.language_model.model.embed_tokens.num_embeddings
         except Exception:
