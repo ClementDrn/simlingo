@@ -96,10 +96,12 @@ class VoltaGPUPatch(GPUPatch):
         Set up environment variables and configurations for Volta GPU compatibility.
         This applies to all Volta architecture GPUs (V100, Tesla V100S, etc).
         """
-        # Ensure this function only runs once
-        if getattr(self.apply_globally, "has_already_run", False):
+        # Ensure this function only runs once per instance
+        if getattr(self, "_global_patch_applied", False):
+            if verbose:
+                print(f"{AnsiColor.BLUE.value}[gpu_compatibility] Volta global patch already applied (skipping){AnsiColor.RESET.value}")
             return False
-        self.apply_globally.has_already_run = True
+        self._global_patch_applied = True
 
         if not torch.cuda.is_available():
             print(f"{AnsiColor.YELLOW.value}Warning: CUDA not available! Aborting setup.{AnsiColor.RESET.value}")
@@ -297,11 +299,13 @@ class VoltaGPUPatch(GPUPatch):
 
     def apply_to_model(self, model, verbose = False):
         """Apply compatibility fixes to a given model instance."""
-        _force_eager_everywhere(model, verbose)
-        _install_sdpa_qwen2_fallback(verbose)
-        _disable_flash_attention_modules(model, verbose)
+        # Call static helpers
+        self._force_eager_everywhere(model, verbose)
+        self._install_sdpa_qwen2_fallback(verbose)
+        self._disable_flash_attention_modules(model, verbose)
         return model
 
+    @staticmethod
     def _disable_flash_attention_modules(root, verbose: bool = False):
         """Force-disable any module attributes that would trigger FlashAttention paths.
 
@@ -332,6 +336,7 @@ class VoltaGPUPatch(GPUPatch):
         
         return root
 
+    @staticmethod
     def _install_sdpa_qwen2_fallback(verbose: bool = False):
         """(Idempotent) Install SDPA fallback for Qwen2 / LLaMA _flash_attention_forward symbol.
 
@@ -386,6 +391,7 @@ class VoltaGPUPatch(GPUPatch):
             pass
         return True
 
+    @staticmethod
     def _force_eager_everywhere(root, verbose: bool = False):
         """Traverse a model hierarchy and enforce eager attention implementation.
 
@@ -407,9 +413,6 @@ class VoltaGPUPatch(GPUPatch):
             # Config objects commonly used in HF
             cfg = getattr(m, "config", None)
             if cfg is not None:
-                # Debug print all config parameters
-                for key, value in cfg.__dict__.items():
-                    print(f"{AnsiColor.CYAN.value}Config param: {key} = {value}{AnsiColor.RESET.value}")
                 try:
                     if hasattr(cfg, "attn_implementation"):
                         cfg.attn_implementation = "eager"

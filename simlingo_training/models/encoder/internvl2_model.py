@@ -1,11 +1,9 @@
+from simlingo_training.utils.gpu_compatibility import get_safe_model_kwargs, get_gpu_compatibility_patch
+
 import torch
 from torch import nn
 from typing import List, Optional
 from transformers import AutoModel
-from simlingo_training.utils.gpu_compatibility import (
-    get_safe_model_kwargs,
-    get_gpu_compatibility_patch
-)
 
 
 class LingoInternVLModel(nn.Module):

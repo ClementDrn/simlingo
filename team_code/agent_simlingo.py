@@ -4,7 +4,6 @@ partially taken from https://github.com/autonomousvision/carla_garage/blob/leade
 """
 # Import GPU compatibility patch early
 from simlingo_training.utils.gpu_compatibility import get_gpu_compatibility_patch
-get_gpu_compatibility_patch().apply_globally()
 
 import importlib.util
 import json
