@@ -4,10 +4,7 @@ from typing import List, Optional
 from transformers import AutoModel
 from simlingo_training.utils.gpu_compatibility import (
     get_safe_model_kwargs,
-    force_eager_everywhere,
-    install_sdpa_qwen2_fallback,
-    disable_flash_attention_modules,
-    safe_model_loading_context
+    get_gpu_compatibility_patch
 )
 
 
@@ -16,20 +13,18 @@ class LingoInternVLModel(nn.Module):
         super().__init__()
 
         # Patch Transformers for Volta GPU compatibility
-        if not safe_model_loading_context().is_flash_supported():
+        if not get_gpu_compatibility_patch().is_flash_attention_supported():
             # Disable FlashAttention
             try:
                 safe_kwargs = get_safe_model_kwargs()
                 self.model = AutoModel.from_pretrained(variant, **safe_kwargs)
-                force_eager_everywhere(self.model)
-                install_sdpa_qwen2_fallback()
-                disable_flash_attention_modules(self.model, verbose=True)
+                get_gpu_compatibility_patch().apply_to_model(self.model)
                 print(f"Loaded {variant} with GPU-compatible parameters")
             except Exception as e:
                 # Fallback to default loading
                 print(f"Warning: Could not load with safe parameters ({e}), using default loading")
                 self.model = AutoModel.from_pretrained(variant, trust_remote_code=True)
-                disable_flash_attention_modules(self.model, verbose=True)
+                get_gpu_compatibility_patch().apply_to_model(self.model, verbose=True)
 
         try:
             self.num_embeddings = self.model.language_model.model.embed_tokens.num_embeddings

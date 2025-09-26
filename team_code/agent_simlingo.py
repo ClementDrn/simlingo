@@ -2,18 +2,10 @@
 partially taken from https://github.com/autonomousvision/carla_garage/blob/leaderboard_2/team_code/sensor_agent.py
 (MIT licence)
 """
+# Import GPU compatibility patch early
+from simlingo_training.utils.gpu_compatibility import get_gpu_compatibility_patch
+get_gpu_compatibility_patch().apply_globally()
 
-# Volta GPU compatibility fix - import this first
-try:
-    from simlingo_training.utils.gpu_compatibility import (
-        setup_volta_compatibility,
-        get_preferred_compute_dtype,
-    )
-    setup_volta_compatibility()  # idempotent
-    print("Volta GPU compatibility utilities loaded successfully.")
-except ImportError as e:
-    print(f"Warning: Could not load Volta compatibility utilities: {e}")
-    
 import importlib.util
 import json
 import math
@@ -100,13 +92,10 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.step = -1
         self.initialized = False
         self.device = torch.device('cuda')
-        # Choose safe compute dtype for the current GPU (V100 lacks native bfloat16)
-        try:
-            cc_major, cc_minor = torch.cuda.get_device_capability()
-        except Exception:
-            cc_major, cc_minor = (0, 0)
-        # Prefer centralized helper (guarantees future consistency)
-        self.compute_dtype = get_preferred_compute_dtype()
+
+        # Choose safe compute dtype for the current GPU (e.g. V100 lacks native bfloat16)
+        self.compute_dtype = get_gpu_compatibility_patch().get_preferred_compute_dtype()
+
         self.DrivingInput = {}
         self.config = GlobalConfig()
 
@@ -192,21 +181,14 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
             cache_dir=cache_dir,
             _recursive_=False
         ).to(self.device)
+
         # Enforce eager attention + SDPA fallback after hydra instantiation (idempotent)
         try:
-            from simlingo_training.utils.gpu_compatibility import (
-                force_eager_everywhere,
-                install_sdpa_qwen2_fallback,
-                disable_flash_attention_modules,
-            )
-            with suppress(Exception):
-                force_eager_everywhere(self.model)
-            with suppress(Exception):
-                install_sdpa_qwen2_fallback()
-            with suppress(Exception):
-                disable_flash_attention_modules(self.model, verbose=True)
+            get_gpu_compatibility_patch().apply_to_model(self.model)
         except Exception:
+            print("Error: Could not apply GPU compatibility patch to model!")
             pass
+
         # Restore original default dtype
         torch.set_default_dtype(default_dtype)
 
@@ -570,7 +552,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
                         prompt_tp = f'Command: {command} in {dist_to_command} meter{next_command}.'
                 
         else:
-            # No explicit route representation required for current eval modes.
+            # FIXME: No explicit route representation required for current eval modes.
             # Set to None to avoid NameError from undefined route_img.
             result['route'] = None
 
