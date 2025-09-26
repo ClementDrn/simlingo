@@ -95,7 +95,7 @@ def setup_volta_compatibility():
     try:
         # Force PyTorch to use math attention instead of flash attention
         torch.backends.cuda.sdp_kernel(enable_flash=False, enable_math=True, enable_mem_efficient=False)
-        print("✅ Disabled FlashAttention in PyTorch SDP kernel")
+        print("Disabled FlashAttention in PyTorch SDP kernel")
     except Exception as e:
         print(f"{AnsiColor.YELLOW.value}Warning: Could not disable SDP flash attention: {e}{AnsiColor.RESET.value}")
 
@@ -110,7 +110,7 @@ def setup_volta_compatibility():
             return _orig_is_package_available(pkg_name)
 
         _hf_import_utils._is_package_available = _patched_is_package_available
-        print("✅ Patched Transformers to ignore flash_attn availability")
+        print("Patched Transformers to ignore flash_attn availability")
     except Exception as e:
         print(f"{AnsiColor.YELLOW.value}Warning: Could not patch Transformers flash_attn availability: {e}{AnsiColor.RESET.value}")
 
@@ -164,7 +164,7 @@ def setup_volta_compatibility():
 
             PreTrainedModel._check_and_enable_flash_attn_2 = classmethod(_patched_check_fa2)
 
-        print("✅ Patched Transformers attention hooks to force eager and disable FA2")
+        print("Patched Transformers attention hooks to force eager and disable FA2")
     except Exception as e:
         print(f"{AnsiColor.YELLOW.value}Warning: Could not patch Transformers attention hooks: {e}{AnsiColor.RESET.value}")
 
@@ -244,7 +244,7 @@ def setup_volta_compatibility():
         except Exception:
             pass
 
-        print("✅ Installed SDPA-based fallback for _flash_attention_forward")
+        print("Installed SDPA-based fallback for _flash_attention_forward")
     except Exception as e:
         print(f"{AnsiColor.YELLOW.value}Warning: Could not install SDPA fallback: {e}{AnsiColor.RESET.value}")
 
@@ -309,7 +309,7 @@ def install_sdpa_qwen2_fallback(verbose: bool = False):
     _qwen2_mod._flash_attention_forward = _sdpa_fallback_forward
     _qwen2_mod._simlingo_sdpa_fallback_installed = True
     if verbose:
-        print("✅ (gpu_compatibility) Installed SDPA fallback for Qwen2 _flash_attention_forward")
+        print("(gpu_compatibility) Installed SDPA fallback for Qwen2 _flash_attention_forward")
     # LLaMA optional
     try:  # pragma: no cover - optional
         import transformers.models.llama.modeling_llama as _llama_mod
@@ -340,6 +340,9 @@ def force_eager_everywhere(root):
         # Config objects commonly used in HF
         cfg = getattr(m, "config", None)
         if cfg is not None:
+            # Debug print all config parameters
+            for key, value in cfg.__dict__.items():
+                print(f"{AnsiColor.CYAN.value}Config param: {key} = {value}{AnsiColor.RESET.value}")
             try:
                 if hasattr(cfg, "attn_implementation"):
                     cfg.attn_implementation = "eager"
@@ -399,7 +402,7 @@ def get_safe_model_kwargs(base_kwargs: dict = None) -> dict:
         if "torch_dtype" not in kwargs:
             kwargs["torch_dtype"] = torch.float16
         kwargs["attn_implementation"] = "eager"
-        print(f"🔧 Using eager attention with dtype={kwargs['torch_dtype']} for Volta GPU compatibility")
+        print(f"Using eager attention with dtype={kwargs['torch_dtype']} for Volta GPU compatibility")
     
     return kwargs
 
