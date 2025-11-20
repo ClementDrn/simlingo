@@ -15,6 +15,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections import deque
 from pathlib import Path
+from dataclasses import dataclass
 
 import carla
 import cv2
@@ -62,6 +63,17 @@ DEBUG = False # saves images during evaluation
 HD_VIZ = False
 USE_UKF = True
 
+@dataclass
+class CustomPrompt:
+    """
+    Data class for custom prompt injection.
+    """
+    text: str                   # The custom prompt string
+    flag: int                   # The type of custom prompt (0: safety, 1: instruction following as extra prompt, 2: instruction following as override, 3: other)
+    injection_time: float       # The injection start time for the custom prompt
+    injection_duration: float   # The duration for which the custom prompt is injected
+
+
 class LingoAgent(autonomous_agent.AutonomousAgent):
     """
         Main class that runs the agents with the run_step function
@@ -97,8 +109,16 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.user_command = None
         self.user_flag = None
         self.running = True
-        self.custom_prompt = None
-        
+
+        # Custom prompt list is based on environment variable
+        self.custom_prompts = []
+        custom_prompts_file = os.environ.get('CUSTOM_PROMPTS_FILE', '')
+        if custom_prompts_file != '':
+            self.custom_prompts = self._parse_custom_prompts_file(custom_prompts_file)
+            print(f"Loaded {len(self.custom_prompts)} custom prompts from {custom_prompts_file}")
+        # Sort custom prompts by injection time for easier search
+        self.custom_prompts.sort(key=lambda x: x.injection_time)
+
         self.LMDRIVE_AUGM = False
         if self.LMDRIVE_AUGM:
                 command_templates_file = f"data/augmented_templates/lmdrive.json"
@@ -353,6 +373,49 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
 
         return sensors
 
+    def set_custom_prompt(self, prompt, flag=3, start_time=0.0, duration=1.0):
+        """
+        Sets a custom prompt to be used by the agent.
+        Args:
+            prompt (str): The custom prompt string.
+            flag (int): The type of custom prompt (0: safety, 1: instruction following, 2: instruction following + override, 3: none).
+            start_time (float): The injection start time for the custom prompt (default is 0.0, start of scenario).
+            duration (float): The duration for which the custom prompt is injected (default is 1.0).
+        """
+        self.custom_prompt = prompt
+        self.user_flag = flag
+        self.custom_prompt_start_time = start_time
+        self.custom_prompt_duration = duration
+
+    def _parse_custom_prompts_file(self, filepath):
+        """
+        Parses the custom prompts from the specified file path.
+        Returns:
+            List of CustomPrompt objects.
+        """
+        custom_prompts = []
+        try:
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+                for item in data:
+                    prompt = CustomPrompt(
+                        text=item['text'],
+                        flag=item['flag'],
+                        injection_time=item['injection_time'],
+                        injection_duration=item['injection_duration']
+                    )
+                    custom_prompts.append(prompt)
+        except Exception as e:
+            print(f"Error reading custom prompts file: {e}")
+
+        return custom_prompts
+
+    def calculate_current_time(self):
+        """
+        Calculates and returns the current simulation time in seconds.
+        """
+        return self.step * self.carla_frame_rate
+
     @torch.inference_mode()  # Turns off gradient computation
     def tick(self, input_data):
         """Pre-processes sensor data and runs the Unscented Kalman Filter"""
@@ -536,12 +599,24 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         else:
             prompt = f"Current speed: {speed} m/s. {prompt_tp} Predict the waypoints."
         
-        if self.custom_prompt is not None:
-            if self.user_flag == 2 or self.user_flag == 3:
-                prompt = f"Current speed: {speed} m/s. {self.custom_prompt}"
+        # Check if a custom prompt should be used
+        # Find the most recent custom prompt that is still active
+        custom_prompt = None
+        current_time = self.calculate_current_time()
+        for prompt_candidate in self.custom_prompts:
+            # Since prompts are added in chronological order,
+            # if the prompt start time is after current time, then the search is over 
+            if prompt_candidate.start_time <= current_time:
+                if current_time < prompt_candidate.start_time + prompt_candidate.duration:
+                    custom_prompt = prompt_candidate
             else:
-                prompt = f"Current speed: {speed} m/s. {prompt_tp} {self.custom_prompt}"
-
+                break 
+              
+        if custom_prompt is not None:
+            if self.user_flag == 2 or self.user_flag == 3:
+                prompt = f"Current speed: {speed} m/s. {custom_prompt.text}"
+            else:
+                prompt = f"Current speed: {speed} m/s. {prompt_tp} {custom_prompt.text}"
 
         if self.user_flag == 1 or self.user_flag == 2:
             prompt = f"<INSTRUCTION_FOLLOWING> {prompt}"
