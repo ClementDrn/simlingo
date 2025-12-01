@@ -59,9 +59,10 @@ def get_entry_point():
     return 'LingoAgent'
 
 
-DEBUG = False # saves images during evaluation
+DEBUG = False # saves images with debug visualization during evaluation
 HD_VIZ = False
 USE_UKF = True
+
 
 @dataclass
 class CustomPrompt:
@@ -229,7 +230,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.state_log = deque(maxlen=max((self.lidar_seq_len * self.data_save_freq), 2))
 
         # Path to where visualizations and other debug output gets stored
-        self.save_path = os.environ.get('SAVE_PATH') + self.save_path_root
+        self.save_path = str(Path(os.environ.get('SAVE_PATH')) / self.save_path_root)
         # self.checkpoint_path = os.environ.get('CHECKPOINT_ENDPOINT').
 
         # Logger that generates logs used for infraction replay in the results_parser.
@@ -245,15 +246,28 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
                     route_only=False,  # with vehicles
                     roi=self.logger_region_of_interest,
             )
-        
-        self.debug_save_path = self.save_path + '/debug_viz' + f'/{self.session}/iter_{self.iter}/{route_type}/{route_number}_{time.strftime("%Y_%m_%d_%H_%M_%S")}'
-        Path(self.debug_save_path).mkdir(parents=True, exist_ok=True)
-        self.save_path_metric = self.debug_save_path + '/metric'
-        Path(self.save_path_metric).mkdir(parents=True, exist_ok=True)
 
+        # Images and metrics path
         if DEBUG:
-            self.save_path_img = self.debug_save_path + '/images'
+            # Common directory
+            self.debug_save_path = self.save_path + '/debug_viz' + f'/{self.session}/iter_{self.iter}/{route_type}/{route_number}_{time.strftime("%Y_%m_%d_%H_%M_%S")}'
+            Path(self.debug_save_path).mkdir(parents=True, exist_ok=True)
+            # Metric info path
+            self.save_path_metric = self.debug_save_path + '/metric'
+            Path(self.save_path_metric).mkdir(parents=True, exist_ok=True)
+            # Debug images path
+            self.save_path_debug_img = self.debug_save_path + '/images'
+            Path(self.save_path_debug_img).mkdir(parents=True, exist_ok=True)
+
+        # Externally enabled output logs
+        # Images with debug visualization
+        self.save_path_img = os.environ.get('SAVE_PATH_IMG')    # defaults to None if not set
+        if self.save_path_img is not None:
             Path(self.save_path_img).mkdir(parents=True, exist_ok=True)
+        # Metadata such as positions of other vehicles/pedestrians
+        self.save_path_metadata = os.environ.get('SAVE_PATH_METADATA')  # defaults to None if not set
+        if self.save_path_metadata is not None:
+            Path(self.save_path_metadata).mkdir(parents=True, exist_ok=True)
             
     def input_thread(self):
         while self.running:
@@ -763,27 +777,31 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         # prepare velocity input
         gt_velocity = tick_data['speed']
 
+        # Debug visualization
         if DEBUG and self.step%5 == 0:
+            camera = None
             tvec = None
             rvec = None
 
             if HD_VIZ:
-                self.camera_for_viz = self.hd_cam_for_viz
+                camera = self.hd_cam_for_viz
                 tvec = np.array([[0.0, 3.5, 5.5]], np.float32)
 
                 cam_rots = [0.0, -15.0, 0.0]
                 rot_matrix = get_rotation_matrix(-cam_rots[0], -cam_rots[1], cam_rots[2])
                 rvec = cv2.Rodrigues(rot_matrix[:3, :3])[0].flatten()
+            else:
+                camera = self.camera_for_viz
 
-            W=self.camera_for_viz.shape[1]
-            H=self.camera_for_viz.shape[0]
+            W=camera.shape[1]
+            H=camera.shape[0]
             camera_intrinsics = np.asarray(get_camera_intrinsics(W,H,110))
 
             # bgr to rgb
-            self.camera_for_viz = cv2.cvtColor(self.camera_for_viz, cv2.COLOR_BGR2RGB)
+            camera = cv2.cvtColor(camera, cv2.COLOR_BGR2RGB)
 
             # draw the predicted waypoints
-            image = Image.fromarray(self.camera_for_viz)
+            image = Image.fromarray(camera)
             draw = ImageDraw.Draw(image)
 
             if self.target_points is not None:
@@ -835,7 +853,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
                         draw.text((10, y_start + y_dist*(idx)), line, font=font, fill=(255, 255, 255, 255))
 
             # save
-            image.save(f"{self.save_path_img}/{self.step}.png")
+            image.save(f"{self.save_path_debug_img}/{self.step}.png")
             
         steer, throttle, brake = self.control_pid(pred_route, gt_velocity, pred_speed_wps)
 
@@ -866,11 +884,56 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
             
         metric_info = self.get_metric_info()
         self.metric_info[self.step] = metric_info
-        if self.save_path_metric is not None and self.step % 1 == 0:
+        if DEBUG and self.save_path_metric is not None and self.step % 1 == 0:
                 # metric info
                 outfile = open(f"{self.save_path_metric}/metric_info.json", 'w')
                 json.dump(self.metric_info, outfile, indent=4)
                 outfile.close()
+
+        # Save raw images
+        if self.save_path_img is not None and self.step % 5 == 0:
+            rgb_camera = cv2.cvtColor(self.camera_for_viz, cv2.COLOR_BGR2RGB)   # from bgr to rgb
+            raw_image_path = os.path.join(self.save_path_img, f"{self.step:06d}.png")
+            Image.fromarray(rgb_camera).save(raw_image_path)
+
+        # Save metadata
+        if self.save_path_metadata is not None and self.step % 5 == 0:
+            # TODO: Fetch information on other actors
+
+            # Get additional vehicle info
+            velocity = self.hero_actor.get_velocity()     
+            
+            # Create metadata dictionary
+            metadata = {
+                'step': self.step,
+                'gps': tick_data['gps'].tolist(),
+                'compass': tick_data['compass'].item(),
+                'speed': tick_data['speed'].item(),
+                'command': self.commands[-1],
+                'target_point': tick_data['target_point'].squeeze(0).cpu().numpy().tolist(),
+                'prompt': self.prompt,
+                'prompt_tp': self.prompt_tp,
+                'control': {
+                    'steer': control.steer,
+                    'throttle': control.throttle,
+                    'brake': control.brake,
+                },
+                'predicted_route': pred_route[0].detach().cpu().numpy().tolist() if pred_route is not None else None,
+                'predicted_speed_wps': pred_speed_wps[0].detach().cpu().numpy().tolist() if pred_speed_wps is not None else None,
+                'language_output': language[0] if language is not None else None,
+                'location': metric_info.get('location', None),  # meters
+                'rotation': metric_info.get('rotation', None),
+                'forward_vector': metric_info.get('forward_vector', None),
+                'right_vector': metric_info.get('right_vector', None),
+                'acceleration': metric_info.get('acceleration', None),  # m/s^2
+                'velocity': [velocity.x, velocity.y, velocity.z],  # m/s
+                'angular_velocity': metric_info.get('angular_velocity', None),  # deg/s
+            }
+
+            # Save file
+            metadata_path = os.path.join(self.save_path_metadata, f"{self.step:06d}.json")
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=4)
 
         return control
 
