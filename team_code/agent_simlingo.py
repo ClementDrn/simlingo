@@ -171,11 +171,11 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.cfg = cfg
         self.cfg.model.vision_model.use_global_img = cfg.data_module.use_global_img
     
-        processor = AutoProcessor.from_pretrained(cfg.model.vision_model.variant, trust_remote_code=True)
-        if 'tokenizer' in processor.__dict__:
-                self.tokenizer = processor.tokenizer
+        self.processor = AutoProcessor.from_pretrained(cfg.model.vision_model.variant, trust_remote_code=True)
+        if 'tokenizer' in self.processor.__dict__:
+                self.tokenizer = self.processor.tokenizer
         else:
-                self.tokenizer = processor
+                self.tokenizer = self.processor
         self.tokenizer.add_special_tokens({'additional_special_tokens': ['<WAYPOINTS>','<WAYPOINTS_DIFF>', '<ORG_WAYPOINTS_DIFF>', '<ORG_WAYPOINTS>', '<WAYPOINT_LAST>', '<ROUTE>', '<ROUTE_DIFF>', '<TARGET_POINT>']})
         self.tokenizer.padding_side = "left"
         # llm_tokenizer = AutoTokenizer.from_pretrained(cfg.model.language_model.variant)
@@ -185,7 +185,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.model = hydra.utils.instantiate(
                 cfg.model,
                 cfg_data_module=cfg.data_module,
-                processor=processor,
+                processor=self.processor,
                 cache_dir=cache_dir,
                 _recursive_=False
             ).to(self.device)
@@ -937,9 +937,11 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         Also writes logging files to disk.
         """
 
-        del self.model
-        del self.config
-        if self.cfg.data_module.encoder == 'llavanext':
+        if hasattr(self, 'model'):
+            del self.model
+        if hasattr(self, 'config'):
+            del self.config
+        if hasattr(self, 'processor'):
             del self.processor
 
 
