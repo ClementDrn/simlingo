@@ -59,7 +59,7 @@ def get_entry_point():
     return 'LingoAgent'
 
 
-DEBUG = False # saves images with debug visualization during evaluation
+DEBUG = os.environ.get('DEBUG', 'false').lower() in ('true', 't', '1')  # saves images with debug visualization during evaluation
 HD_VIZ = False
 USE_UKF = True
 
