@@ -115,10 +115,14 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.custom_prompts = []
         custom_prompts_file = os.environ.get('CUSTOM_PROMPTS_FILE', '')
         if custom_prompts_file != '':
+            # Load custom prompts from specified file
             self.custom_prompts = self._parse_custom_prompts_file(custom_prompts_file)
             print(f"Loaded {len(self.custom_prompts)} custom prompts from {custom_prompts_file}")
-        # Sort custom prompts by injection time for easier search
-        self.custom_prompts.sort(key=lambda x: x.injection_time)
+            
+            # Sort custom prompts by injection time for easier search
+            self.custom_prompts.sort(key=lambda x: x.injection_time)
+        else:
+            print("No custom prompts file specified.")
 
         self.LMDRIVE_AUGM = False
         if self.LMDRIVE_AUGM:
@@ -411,6 +415,9 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         try:
             with open(filepath, 'r') as f:
                 data = json.load(f)
+                # Handle both single object and array of objects
+                if isinstance(data, dict):
+                    data = [data]
                 for item in data:
                     prompt = CustomPrompt(
                         text=item['text'],
@@ -419,6 +426,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
                         injection_duration=item['injection_duration']
                     )
                     custom_prompts.append(prompt)
+                    print(f"Loaded custom prompt: {prompt.text} at {prompt.injection_time}s for {prompt.injection_duration}s")
         except Exception as e:
             print(f"Error reading custom prompts file: {e}")
 
@@ -619,15 +627,16 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         current_time = self.calculate_current_time()
         for prompt_candidate in self.custom_prompts:
             # Since prompts are added in chronological order,
-            # if the prompt start time is after current time, then the search is over 
-            if prompt_candidate.start_time <= current_time:
-                if current_time < prompt_candidate.start_time + prompt_candidate.duration:
+            # if the prompt injection time is after current time, then the search is over 
+            if prompt_candidate.injection_time <= current_time:
+                if current_time < prompt_candidate.injection_time + prompt_candidate.injection_duration:
                     custom_prompt = prompt_candidate
             else:
                 break 
-              
+        
         if custom_prompt is not None:
-            if self.user_flag == 2 or self.user_flag == 3:
+            print(f"Injecting custom prompt at time {current_time:.2f}s: {custom_prompt.text}")
+            if custom_prompt.flag == 2 or custom_prompt.flag == 3:
                 prompt = f"Current speed: {speed} m/s. {custom_prompt.text}"
             else:
                 prompt = f"Current speed: {speed} m/s. {prompt_tp} {custom_prompt.text}"
