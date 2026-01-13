@@ -113,7 +113,8 @@ class SceneDataCollector:
         self.bb_save_radius = bb_save_radius
     
     def get_scene_data(self, include_ego=True, include_vehicles=True, include_walkers=True,
-                       include_traffic_lights=True, include_stop_signs=True, 
+                       include_traffic_lights=True, include_stop_signs=True,
+                       include_statics=True, include_landmarks=True,
                        include_weather=True, include_ego_info=True, lidar=None):
         """
         Collect comprehensive scene data.
@@ -124,6 +125,8 @@ class SceneDataCollector:
             include_walkers: Include pedestrians
             include_traffic_lights: Include traffic lights
             include_stop_signs: Include stop signs
+            include_statics: Include static objects (props, meshes, etc.)
+            include_landmarks: Include road landmarks (signs, signals, etc.)
             include_weather: Include weather information
             include_ego_info: Include detailed ego lane/road information
             lidar: Optional LiDAR point cloud for computing point counts in bounding boxes
@@ -167,7 +170,7 @@ class SceneDataCollector:
         if include_walkers:
             walkers = self._get_walkers_data(
                 actors.filter('*walker*'),
-                ego_transform, ego_matrix, ego_yaw, lidar
+                ego_transform, ego_matrix, ego_yaw, ego_wp, lidar
             )
             results.extend(walkers)
         
@@ -184,6 +187,19 @@ class SceneDataCollector:
                 ego_transform, ego_matrix, ego_yaw
             )
             results.extend(stop_signs)
+        
+        if include_statics:
+            statics = self._get_statics_data(
+                actors.filter('static.*'),
+                ego_transform, ego_matrix, ego_yaw, ego_wp, lidar
+            )
+            results.extend(statics)
+        
+        if include_landmarks:
+            landmarks = self._get_landmarks_data(
+                ego_wp, ego_matrix, ego_yaw
+            )
+            results.extend(landmarks)
         
         if include_weather:
             weather_data = self._get_weather_data()
@@ -323,10 +339,11 @@ class SceneDataCollector:
         
         return results
     
-    def _get_walkers_data(self, walker_list, ego_transform, ego_matrix, ego_yaw, lidar):
+    def _get_walkers_data(self, walker_list, ego_transform, ego_matrix, ego_yaw, ego_wp, lidar):
         """Get data for all walkers/pedestrians in range."""
         results = []
         ego_location = ego_transform.location
+        ego_lane_direction = ego_wp.lane_id / abs(ego_wp.lane_id) if ego_wp.lane_id != 0 else 1
         
         for walker in walker_list:
             if walker.get_location().distance(ego_location) >= self.bb_save_radius:
@@ -344,7 +361,7 @@ class SceneDataCollector:
             relative_pos = get_relative_transform(ego_matrix, walker_matrix)
             
             # Compute speed
-            walker_speed = np.sqrt(walker_velocity.x**2 + walker_velocity.y**2 + walker_velocity.z**2)
+            walker_speed = get_forward_speed(walker_velocity, walker_transform)
             
             # Compute distance
             distance = np.linalg.norm(relative_pos)
@@ -357,8 +374,29 @@ class SceneDataCollector:
             if lidar is not None:
                 num_points = self._get_points_in_bbox(relative_pos, relative_yaw, extent_list, lidar)
             
+            # Get walker waypoint for lane relationship info
+            walker_wp = self.world_map.get_waypoint(
+                walker.get_location(),
+                project_to_road=True,
+                lane_type=carla.libcarla.LaneType.Any
+            )
+            lane_type = walker_wp.lane_type
+            same_road_as_ego = False
+            lane_relative_to_ego = None
+            same_direction_as_ego = False
+            
+            if walker_wp.road_id == ego_wp.road_id:
+                same_road_as_ego = True
+                direction = walker_wp.lane_id / abs(walker_wp.lane_id) if walker_wp.lane_id != 0 else 1
+                if direction == ego_lane_direction:
+                    same_direction_as_ego = True
+                lane_relative_to_ego = walker_wp.lane_id - ego_wp.lane_id
+            
             result = {
                 'class': 'walker',
+                'role_name': walker.attributes.get('role_name', 'unknown'),
+                'gender': walker.attributes.get('gender', 'unknown'),
+                'age': walker.attributes.get('age', 'unknown'),
                 'extent': extent_list,
                 'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
                 'yaw': relative_yaw,
@@ -366,7 +404,10 @@ class SceneDataCollector:
                 'distance': distance,
                 'speed': walker_speed,
                 'id': int(walker.id),
-                'type_id': walker.type_id,
+                'lane_type': lane_type,
+                'same_road_as_ego': same_road_as_ego,
+                'same_direction_as_ego': same_direction_as_ego,
+                'lane_relative_to_ego': lane_relative_to_ego,
                 'matrix': walker_transform.get_matrix()
             }
             results.append(result)
@@ -439,6 +480,141 @@ class SceneDataCollector:
                 'id': int(stop_sign.id),
                 'type_id': stop_sign.type_id,
                 'matrix': ss_transform.get_matrix()
+            }
+            results.append(result)
+        
+        return results
+    
+    def _get_statics_data(self, statics_list, ego_transform, ego_matrix, ego_yaw, ego_wp, lidar):
+        """Get data for all static objects in range."""
+        results = []
+        ego_location = ego_transform.location
+        ego_lane_direction = ego_wp.lane_id / abs(ego_wp.lane_id) if ego_wp.lane_id != 0 else 1
+        
+        for static in statics_list:
+            if static.get_location().distance(ego_location) >= self.bb_save_radius:
+                continue
+            
+            static_transform = static.get_transform()
+            static_rotation = static_transform.rotation
+            static_location = static_transform.location
+            static_matrix = np.array(static_transform.get_matrix())
+            static_extent = static.bounding_box.extent
+            # NOTE: Fixed bug where static_extent x and y are swapped in data_agent.py
+            extent_list = [static_extent.y, static_extent.x, static_extent.z]
+            
+            # Compute relative position and yaw
+            yaw = np.deg2rad(static_rotation.yaw)
+            relative_yaw = normalize_angle(yaw - ego_yaw)
+            relative_pos = get_relative_transform(ego_matrix, static_matrix)
+            distance = np.linalg.norm(relative_pos)
+            
+            # Try to get speed (some statics may not have velocity)
+            try:
+                static_velocity = static.get_velocity()
+                static_speed = get_forward_speed(static_velocity, static_transform)
+            except:
+                static_speed = 0.0
+            
+            # Count LiDAR points
+            num_points = -1
+            if lidar is not None:
+                num_points = self._get_points_in_bbox(relative_pos, relative_yaw, extent_list, lidar)
+            
+            # Get static waypoint for lane relationship info
+            static_wp = self.world_map.get_waypoint(
+                static_location,
+                project_to_road=True,
+                lane_type=carla.libcarla.LaneType.Any
+            )
+            same_road_as_ego = False
+            lane_relative_to_ego = None
+            same_direction_as_ego = False
+            
+            if static_wp.road_id == ego_wp.road_id:
+                same_road_as_ego = True
+                direction = static_wp.lane_id / abs(static_wp.lane_id) if static_wp.lane_id != 0 else 1
+                if direction == ego_lane_direction:
+                    same_direction_as_ego = True
+                lane_relative_to_ego = static_wp.lane_id - ego_wp.lane_id
+            
+            # Determine class based on type_id
+            mesh_path = static.attributes.get('mesh_path', None)
+            
+            if static.type_id == 'static.prop.mesh':
+                if mesh_path and "Car" in mesh_path:
+                    result = {
+                        'class': 'static_car',
+                        'extent': extent_list,
+                        'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
+                        'yaw': relative_yaw,
+                        'distance': distance,
+                        'speed': static_speed,
+                        'num_points': int(num_points),
+                        'road_id': static_wp.road_id,
+                        'junction_id': static_wp.junction_id,
+                        'lane_id': static_wp.lane_id,
+                        'on_lane_type': str(static_wp.lane_type),
+                        'same_road_as_ego': same_road_as_ego,
+                        'same_direction_as_ego': same_direction_as_ego,
+                        'lane_relative_to_ego': lane_relative_to_ego,
+                        'matrix': static_transform.get_matrix(),
+                        'mesh_path': mesh_path
+                    }
+                else:
+                    continue  # Skip non-car mesh props
+            elif static.type_id == 'static.prop.trafficwarning':
+                # The huge traffic warning sign in scenarios ConstructionObstacle and ConstructionObstacleTwoWays
+                result = {
+                    'class': 'static_trafficwarning',
+                    'extent': extent_list,
+                    'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
+                    'yaw': relative_yaw,
+                    'num_points': int(num_points),
+                    'distance': distance,
+                    'mesh_path': mesh_path
+                }
+            else:
+                result = {
+                    'class': 'static',
+                    'type_id': static.type_id,
+                    'extent': extent_list,
+                    'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
+                    'yaw': relative_yaw,
+                    'num_points': int(num_points),
+                    'distance': distance,
+                    'mesh_path': mesh_path
+                }
+            
+            results.append(result)
+        
+        return results
+    
+    def _get_landmarks_data(self, ego_wp, ego_matrix, ego_yaw):
+        """Get data for all landmarks near the ego waypoint."""
+        results = []
+        
+        landmarks = ego_wp.get_landmarks(40.0)
+        for landmark in landmarks:
+            landmark_transform = landmark.transform
+            landmark_rotation = landmark_transform.rotation
+            landmark_matrix = np.array(landmark_transform.get_matrix())
+            
+            # Compute relative position and yaw
+            yaw = np.deg2rad(landmark_rotation.yaw)
+            relative_yaw = normalize_angle(yaw - ego_yaw)
+            relative_pos = get_relative_transform(ego_matrix, landmark_matrix)
+            distance = np.linalg.norm(relative_pos)
+            
+            result = {
+                'class': 'landmark',
+                'name': landmark.name,
+                'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
+                'yaw': relative_yaw,
+                'distance': distance,
+                'id': int(landmark.id),
+                'text': landmark.text,
+                'value': landmark.value,
             }
             results.append(result)
         
