@@ -46,6 +46,7 @@ from team_code.simlingo_utils import (
     get_rotation_matrix,
     project_points,
 )
+from team_code.scene_data_collector import SceneDataCollector
 
 # Configure pytorch for maximum performance
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -272,6 +273,12 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
         self.save_path_metadata = os.environ.get('SAVE_PATH_METADATA')  # defaults to None if not set
         if self.save_path_metadata is not None:
             Path(self.save_path_metadata).mkdir(parents=True, exist_ok=True)
+        
+        # Scene data collector for surrounding objects
+        self.scene_data_collector = SceneDataCollector(
+                ego_vehicle=self.hero_actor,    # hero_actor is initialized in parent class Bench2Drive.AutonomousAgent
+                bb_save_radius=50.0  # within 50m radius
+            )
             
     def input_thread(self):
         while self.running:
@@ -907,7 +914,18 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
 
         # Save metadata
         if self.save_path_metadata is not None and self.step % 5 == 0:
-            # TODO: Fetch information on other actors
+            # Collect scene data (surrounding objects)
+            scene_data = []
+            if self.scene_data_collector is not None:
+                scene_data = self.scene_data_collector.get_scene_data(
+                    include_ego=True,
+                    include_vehicles=True,
+                    include_walkers=True,
+                    include_traffic_lights=True,
+                    include_stop_signs=True,
+                    include_weather=True,
+                    include_ego_info=True,
+                )
 
             # Get additional vehicle info
             velocity = self.hero_actor.get_velocity()     
@@ -937,6 +955,7 @@ class LingoAgent(autonomous_agent.AutonomousAgent):
                 'acceleration': metric_info.get('acceleration', None),  # m/s^2
                 'velocity': [velocity.x, velocity.y, velocity.z],  # m/s
                 'angular_velocity': metric_info.get('angular_velocity', None),  # deg/s
+                'scene_objects': scene_data,  # Surrounding objects (vehicles, walkers, traffic lights, etc.)
             }
 
             # Save file
