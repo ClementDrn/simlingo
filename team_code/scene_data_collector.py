@@ -299,10 +299,12 @@ class SceneDataCollector:
             lane_relative_to_ego = None
             
             if same_road_as_ego:
-                ego_lane_direction = ego_wp.lane_id / abs(ego_wp.lane_id) if ego_wp.lane_id != 0 else 1
-                vehicle_lane_direction = vehicle_wp.lane_id / abs(vehicle_wp.lane_id) if vehicle_wp.lane_id != 0 else 1
+                # NOTE: There is no lane_id=0, 0 represents the boundary between the two driving directions.
+                ego_lane_direction = 1 if ego_wp.lane_id >= 0 else -1
+                vehicle_lane_direction = 1 if vehicle_wp.lane_id >= 0 else -1
                 same_direction_as_ego = ego_lane_direction == vehicle_lane_direction
-                lane_relative_to_ego = vehicle_wp.lane_id - ego_wp.lane_id
+                # Calculate lane difference with ego, negative means on the left side, while positive means on the right side
+                lane_relative_to_ego = (vehicle_wp.lane_id - ego_wp.lane_id - (0 if same_direction_as_ego else 1) * vehicle_lane_direction) * ego_lane_direction
             
             result = {
                 'class': 'car',
@@ -343,7 +345,8 @@ class SceneDataCollector:
         """Get data for all walkers/pedestrians in range."""
         results = []
         ego_location = ego_transform.location
-        ego_lane_direction = ego_wp.lane_id / abs(ego_wp.lane_id) if ego_wp.lane_id != 0 else 1
+        # NOTE: There is no lane_id=0, 0 represents the boundary between the two driving directions.
+        ego_lane_direction = 1 if ego_wp.lane_id >= 0 else -1
         
         for walker in walker_list:
             if walker.get_location().distance(ego_location) >= self.bb_save_radius:
@@ -387,10 +390,10 @@ class SceneDataCollector:
             
             if walker_wp.road_id == ego_wp.road_id:
                 same_road_as_ego = True
-                direction = walker_wp.lane_id / abs(walker_wp.lane_id) if walker_wp.lane_id != 0 else 1
-                if direction == ego_lane_direction:
-                    same_direction_as_ego = True
-                lane_relative_to_ego = walker_wp.lane_id - ego_wp.lane_id
+                walker_lane_direction = 1 if walker_wp.lane_id >= 0 else -1
+                same_direction_as_ego = ego_lane_direction == walker_lane_direction
+                # Calculate lane difference with ego, negative means on the left side, while positive means on the right side
+                lane_relative_to_ego = (walker_wp.lane_id - ego_wp.lane_id - (0 if same_direction_as_ego else 1) * walker_lane_direction) * ego_lane_direction
             
             result = {
                 'class': 'walker',
@@ -489,19 +492,22 @@ class SceneDataCollector:
         """Get data for all static objects in range."""
         results = []
         ego_location = ego_transform.location
-        ego_lane_direction = ego_wp.lane_id / abs(ego_wp.lane_id) if ego_wp.lane_id != 0 else 1
+        # NOTE: There is no lane_id=0, 0 represents the boundary between the two driving directions.
+        ego_lane_direction = 1 if ego_wp.lane_id >= 0 else -1
         
         for static in statics_list:
             if static.get_location().distance(ego_location) >= self.bb_save_radius:
                 continue
             
+            static_id = static.id
+
             static_transform = static.get_transform()
             static_rotation = static_transform.rotation
             static_location = static_transform.location
             static_matrix = np.array(static_transform.get_matrix())
             static_extent = static.bounding_box.extent
             # NOTE: Fixed bug where static_extent x and y are swapped in data_agent.py
-            extent_list = [static_extent.y, static_extent.x, static_extent.z]
+            extent_list = [static_extent.x, static_extent.y, static_extent.z]
             
             # Compute relative position and yaw
             yaw = np.deg2rad(static_rotation.yaw)
@@ -533,10 +539,10 @@ class SceneDataCollector:
             
             if static_wp.road_id == ego_wp.road_id:
                 same_road_as_ego = True
-                direction = static_wp.lane_id / abs(static_wp.lane_id) if static_wp.lane_id != 0 else 1
-                if direction == ego_lane_direction:
-                    same_direction_as_ego = True
-                lane_relative_to_ego = static_wp.lane_id - ego_wp.lane_id
+                static_lane_direction = 1 if static_wp.lane_id >= 0 else -1
+                same_direction_as_ego = ego_lane_direction == static_lane_direction
+                # Calculate lane difference with ego, negative means on the left side, while positive means on the right side
+                lane_relative_to_ego = (static_wp.lane_id - ego_wp.lane_id - (0 if same_direction_as_ego else 1) * static_lane_direction) * ego_lane_direction
             
             # Determine class based on type_id
             mesh_path = static.attributes.get('mesh_path', None)
@@ -545,6 +551,7 @@ class SceneDataCollector:
                 if mesh_path and "Car" in mesh_path:
                     result = {
                         'class': 'static_car',
+                        'id': static_id,
                         'extent': extent_list,
                         'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
                         'yaw': relative_yaw,
@@ -567,22 +574,36 @@ class SceneDataCollector:
                 # The huge traffic warning sign in scenarios ConstructionObstacle and ConstructionObstacleTwoWays
                 result = {
                     'class': 'static_trafficwarning',
+                    'id': static_id,
                     'extent': extent_list,
                     'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
                     'yaw': relative_yaw,
                     'num_points': int(num_points),
                     'distance': distance,
+                    'road_id': static_wp.road_id,
+                    'junction_id': static_wp.junction_id,
+                    'lane_id': static_wp.lane_id,
+                    'same_road_as_ego': same_road_as_ego,
+                    'same_direction_as_ego': same_direction_as_ego,
+                    'lane_relative_to_ego': lane_relative_to_ego,
                     'mesh_path': mesh_path
                 }
             else:
                 result = {
                     'class': 'static',
+                    'id': static_id,
                     'type_id': static.type_id,
                     'extent': extent_list,
                     'position': [relative_pos[0], relative_pos[1], relative_pos[2]],
                     'yaw': relative_yaw,
                     'num_points': int(num_points),
                     'distance': distance,
+                    'road_id': static_wp.road_id,
+                    'junction_id': static_wp.junction_id,
+                    'lane_id': static_wp.lane_id,
+                    'same_road_as_ego': same_road_as_ego,
+                    'same_direction_as_ego': same_direction_as_ego,
+                    'lane_relative_to_ego': lane_relative_to_ego,
                     'mesh_path': mesh_path
                 }
             
