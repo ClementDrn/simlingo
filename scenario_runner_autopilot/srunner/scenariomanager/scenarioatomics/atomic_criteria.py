@@ -406,12 +406,13 @@ class CollisionTest(Criterion):
         collision_event = TrafficEvent(event_type=actor_type, frame=GameTime.get_frame())
         collision_event.set_dict({'other_actor': event.other_actor, 'location': actor_location})
         collision_event.set_message(
-            "Agent collided against object with type={} and id={} at (x={}, y={}, z={})".format(
+            "Agent collided against object with type={} and id={} at (x={}, y={}, z={}) at t={}s".format(
                 event.other_actor.type_id,
                 event.other_actor.id,
                 round(actor_location.x, 3),
                 round(actor_location.y, 3),
-                round(actor_location.z, 3)))
+                round(actor_location.z, 3),
+                round(self._collision_time, 2)))
         self.events.append(collision_event)
 
 
@@ -461,10 +462,11 @@ class ActorBlockedTest(Criterion):
 
                         vehicle_location = CarlaDataProvider.get_location(self.actor)
                         event = TrafficEvent(event_type=TrafficEventType.VEHICLE_BLOCKED, frame=GameTime.get_frame())
-                        event.set_message('Agent got blocked at (x={}, y={}, z={})'.format(
+                        event.set_message('Agent got blocked at (x={}, y={}, z={}) at t={}s'.format(
                             round(vehicle_location.x, 3),
                             round(vehicle_location.y, 3),
-                            round(vehicle_location.z, 3))
+                            round(vehicle_location.z, 3),
+                            round(GameTime.get_time(), 2))
                         )
                         event.set_dict({'location': vehicle_location})
                         self.events.append(event)
@@ -968,12 +970,13 @@ class OnSidewalkTest(Criterion):
             message_start = 'Agent went outside the lane'
 
         event.set_message(
-            '{} for about {} meters, starting at (x={}, y={}, z={})'.format(
+            '{} for about {} meters, starting at (x={}, y={}, z={}) at t={}s'.format(
                 message_start,
                 round(distance, 3),
                 round(location.x, 3),
                 round(location.y, 3),
-                round(location.z, 3)))
+                round(location.z, 3),
+                round(GameTime.get_time(), 2)))
 
     def _set_event_dict(self, event, location, distance):
         """
@@ -1093,9 +1096,10 @@ class OutsideRouteLanesTest(Criterion):
 
         self._traffic_event.set_message(
             "Agent went outside its route lanes for about {} meters "
-            "({}% of the completed route)".format(
+            "({}% of the completed route) at t={}s".format(
                 round(self._wrong_distance, 3),
-                round(percentage, 2)))
+                round(percentage, 2),
+                round(GameTime.get_time(), 3)))
 
         self._traffic_event.set_dict({
             'distance': self._wrong_distance,
@@ -1318,12 +1322,13 @@ class WrongLaneTest(Criterion):
         """
 
         event.set_message(
-            "Agent invaded a lane in opposite direction for {} meters, starting at (x={}, y={}, z={}). "
+            "Agent invaded a lane in opposite direction for {} meters, starting at (x={}, y={}, z={}) at t={}s. "
             "road_id={}, lane_id={}".format(
                 round(distance, 3),
                 round(location.x, 3),
                 round(location.y, 3),
                 round(location.z, 3),
+                round(GameTime.get_time(), 2),
                 road_id,
                 lane_id))
 
@@ -1494,10 +1499,11 @@ class InRouteTest(Criterion):
 
                 route_deviation_event = TrafficEvent(event_type=TrafficEventType.ROUTE_DEVIATION, frame=GameTime.get_frame())
                 route_deviation_event.set_message(
-                    "Agent deviated from the route at (x={}, y={}, z={})".format(
+                    "Agent deviated from the route at (x={}, y={}, z={}) at t={}s".format(
                         round(location.x, 3),
                         round(location.y, 3),
-                        round(location.z, 3)))
+                        round(location.z, 3),
+                        round(GameTime.get_time(), 2)))
                 route_deviation_event.set_dict({'location': location})
 
                 self.events.append(route_deviation_event)
@@ -1735,11 +1741,12 @@ class RunningRedLightTest(Criterion):
                         location = traffic_light.get_transform().location
                         red_light_event = TrafficEvent(event_type=TrafficEventType.TRAFFIC_LIGHT_INFRACTION, frame=GameTime.get_frame())
                         red_light_event.set_message(
-                            "Agent ran a red light {} at (x={}, y={}, z={})".format(
+                            "Agent ran a red light {} at (x={}, y={}, z={}) at t={}s".format(
                                 traffic_light.id,
                                 round(location.x, 3),
                                 round(location.y, 3),
-                                round(location.z, 3)))
+                                round(location.z, 3),
+                                round(GameTime.get_time(), 2)))
                         red_light_event.set_dict({'id': traffic_light.id, 'location': location})
 
                         self.events.append(red_light_event)
@@ -1938,11 +1945,12 @@ class RunningStopTest(Criterion):
                 stop_location = self._target_stop_sign.get_transform().location
                 running_stop_event = TrafficEvent(event_type=TrafficEventType.STOP_INFRACTION, frame=GameTime.get_frame())
                 running_stop_event.set_message(
-                    "Agent ran a stop with id={} at (x={}, y={}, z={})".format(
+                    "Agent ran a stop with id={} at (x={}, y={}, z={}) at t={}s".format(
                         self._target_stop_sign.id,
                         round(stop_location.x, 3),
                         round(stop_location.y, 3),
-                        round(stop_location.z, 3)))
+                        round(stop_location.z, 3),
+                        round(GameTime.get_time(), 2)))
                 running_stop_event.set_dict({'id': self._target_stop_sign.id, 'location': stop_location})
 
                 self.events.append(running_stop_event)
@@ -2152,10 +2160,11 @@ class YieldToEmergencyVehicleTest(Criterion):
         if not self._terminated:
             if self.test_status == "FAILURE":
                 traffic_event = TrafficEvent(TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE, GameTime.get_frame())
-                traffic_event.set_message("Agent failed to yield to an emergency vehicle at (x={}, y={}, z={})".format(
+                traffic_event.set_message("Agent failed to yield to an emergency vehicle at (x={}, y={}, z={}) at t={}s".format(
                         round(self.actor.get_location().x, 3),
                         round(self.actor.get_location().y, 3),
-                        round(self.actor.get_location().z, 3)))
+                        round(self.actor.get_location().z, 3),
+                        round(GameTime.get_time(), 2)))
                 self.events.append(traffic_event)
 
             self._terminated = True
@@ -2199,10 +2208,11 @@ class ScenarioTimeoutTest(Criterion):
             self.test_status = "FAILURE"
 
             traffic_event = TrafficEvent(event_type=TrafficEventType.SCENARIO_TIMEOUT, frame=GameTime.get_frame())
-            traffic_event.set_message("Agent timed out a scenario at (x={}, y={}, z={})".format(
+            traffic_event.set_message("Agent timed out a scenario at (x={}, y={}, z={}) at t={}s".format(
                         round(self.actor.get_location().x, 3),
                         round(self.actor.get_location().y, 3),
-                        round(self.actor.get_location().z, 3)))
+                        round(self.actor.get_location().z, 3),
+                        round(GameTime.get_time(), 2)))
             self.events.append(traffic_event)
         py_trees.blackboard.Blackboard().set(blackboard_name, None, True)
 
